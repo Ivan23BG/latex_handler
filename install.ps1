@@ -1,5 +1,11 @@
 $ErrorActionPreference = 'Stop'
 
+# Force TLS 1.2 for GitHub downloads on Windows PowerShell 5.1
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Disable UI progress bar to speed up Invoke-WebRequest downloads
+$ProgressPreference = 'SilentlyContinue'
+
 $Repo = "Ivan23BG/latex_handler"
 $ArchiveUrl = "https://github.com/$Repo/releases/latest/download/latex_handler-windows.zip"
 

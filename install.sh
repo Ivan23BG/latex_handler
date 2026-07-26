@@ -32,6 +32,6 @@ echo "Installation complete!"
 
 # Warn if ~/.local/bin is not in PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo "[Warning] $BIN_DIR is not in your PATH."
-    echo "   Please add 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to your shell config (~/.bashrc, ~/.zshrc, or ~/.config/fish/config.fish)."
+    echo "   For bash/zsh, add: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo "   For fish, run:     fish_add_path ~/.local/bin"
 fi
