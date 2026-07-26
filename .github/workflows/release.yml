@@ -1,0 +1,62 @@
+name: Release CLI
+
+# Trigger when pushing a version tag, e.g.
+# git tag v1.0.0
+# git push origin v1.0.0
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: latex_handler
+            asset_name: latex_handler-linux
+
+          - os: windows-latest
+            artifact_name: latex_handler.exe
+            asset_name: latex_handler-windows.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Prepare Linux binary
+        if: runner.os == 'Linux'
+        run: |
+          cp target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          chmod +x ${{ matrix.asset_name }}
+
+      - name: Prepare Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item `
+            "target\release\${{ matrix.artifact_name }}" `
+            "${{ matrix.asset_name }}"
+
+      - name: Upload binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset_name }}
+          generate_release_notes: true
