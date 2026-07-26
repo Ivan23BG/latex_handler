@@ -1,8 +1,5 @@
 name: Release CLI
 
-# Trigger when pushing a version tag, e.g.
-# git tag v1.0.0
-# git push origin v1.0.0
 on:
   push:
     tags:
@@ -21,12 +18,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: latex_handler
-            asset_name: latex_handler-linux
+            binary_name: latex_handler
+            archive_name: latex_handler-linux.tar.gz
 
           - os: windows-latest
-            artifact_name: latex_handler.exe
-            asset_name: latex_handler-windows.exe
+            binary_name: latex_handler.exe
+            archive_name: latex_handler-windows.zip
 
     steps:
       - name: Checkout repository
@@ -41,22 +38,26 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Prepare Linux binary
+      # Linux: create tar.gz (preserves executable permissions)
+      - name: Package Linux binary
         if: runner.os == 'Linux'
         run: |
-          cp target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          chmod +x ${{ matrix.asset_name }}
+          chmod +x target/release/${{ matrix.binary_name }}
+          tar -czf ${{ matrix.archive_name }} \
+            -C target/release \
+            ${{ matrix.binary_name }}
 
-      - name: Prepare Windows binary
+      # Windows: create zip
+      - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item `
-            "target\release\${{ matrix.artifact_name }}" `
-            "${{ matrix.asset_name }}"
+          Compress-Archive `
+            -Path "target\release\${{ matrix.binary_name }}" `
+            -DestinationPath "${{ matrix.archive_name }}"
 
-      - name: Upload binary to GitHub Release
+      - name: Upload release archive
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset_name }}
+          files: ${{ matrix.archive_name }}
           generate_release_notes: true
