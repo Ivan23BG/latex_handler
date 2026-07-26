@@ -10,12 +10,12 @@ Open your terminal and run the command for your OS. This will download the lates
 
 ### Linux / macOS
 ```bash
-curl -sSL [https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.sh](https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.sh) | bash
+curl -sSL https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm [https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.ps1](https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.ps1) | iex
+irm https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.ps1 | iex
 ```
 
 Note: Make sure you restart your terminal after installation so that the `latex_handler` command is recognized.
