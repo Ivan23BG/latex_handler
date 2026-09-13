@@ -245,19 +245,21 @@ fn compile_latex(
 
     let tex_filename = format!("{}.tex", job_name);
     let outdir_arg = format!("-outdir={}", build_dir.display());
+	let log_stdout = fs::File::create(log_dir.join(format!("{}.stdout.log", job_name))).ok();
+	let log_stderr = fs::File::create(log_dir.join(format!("{}.stderr.log", job_name))).ok();
 
-    let status = Command::new("latexmk")
-        .arg("-pdf")
-        .arg("-synctex=1")
-        .arg("-shell-escape")
-        .arg("-interaction=nonstopmode")
-        .arg("-halt-on-error")
-        .arg(&outdir_arg)
-        .arg(&tex_filename)
-        .current_dir(tex_file.parent().unwrap_or_else(|| Path::new(".")))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+	let status = Command::new("latexmk")
+	    .arg("-pdf")
+	    .arg("-synctex=1")
+	    .arg("-shell-escape")
+	    .arg("-interaction=nonstopmode")
+	    .arg("-halt-on-error")
+	    .arg(&outdir_arg)
+	    .arg(&tex_filename)
+	    .current_dir(tex_file.parent().unwrap_or_else(|| Path::new(".")))
+	    .stdout(log_stdout.map_or(Stdio::null(), Stdio::from))
+	    .stderr(log_stderr.map_or(Stdio::null(), Stdio::from))
+	    .status();
 
     let success = match status {
         Ok(s) => s.success(),
