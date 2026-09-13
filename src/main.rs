@@ -269,6 +269,12 @@ fn compile_latex(
     if pdf_src.exists() {
         let _ = fs::copy(&pdf_src, pdf_dir.join(format!("{}.pdf", job_name)));
     }
+    
+    // Copy SyncTeX file
+    let synctex_src = build_dir.join(format!("{}.synctex.gz", job_name));
+    if synctex_src.exists() {
+        let _ = fs::copy(&synctex_src, pdf_dir.join(format!("{}.synctex.gz", job_name)));
+    }
 
     // Move log file
     let log_src = build_dir.join(format!("{}.log", job_name));
