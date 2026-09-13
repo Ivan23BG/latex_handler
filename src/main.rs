@@ -121,7 +121,6 @@ fn main() {
 
             let src_dir = project_root.join("src");
             let build_root = project_root.join("build");
-            let pdf_root = project_root.join("pdfs");
             let log_root = project_root.join("logs");
 
             let exclude_patterns = vec!["legacy", "templates", "tmp", "temp"];
@@ -158,7 +157,7 @@ fn main() {
                 tex_files
                     .into_par_iter()
                     .partition(|tex| {
-                        compile_latex(tex, &src_dir, &build_root, &pdf_root, &log_root)
+                        compile_latex(tex, &src_dir, &build_root, &log_root)
                     })
             });
 
@@ -217,12 +216,11 @@ fn mirror_under(root_dir: &Path, src_dir: &Path, tex_file: &Path) -> io::Result<
     Ok(target)
 }
 
-/// Compiles a single .tex file, moves PDF to /pdfs and log to /logs
+/// Compiles a single .tex file, copies PDF and synctex to a sibling _pdf folder, and moves the log to /logs
 fn compile_latex(
     tex_file: &Path,
     src_dir: &Path,
     build_root: &Path,
-    pdf_root: &Path,
     log_root: &Path,
 ) -> bool {
     let job_name = match tex_file.file_stem().and_then(|s| s.to_str()) {
@@ -234,10 +232,15 @@ fn compile_latex(
         Ok(d) => d,
         Err(_) => return false,
     };
-    let pdf_dir = match mirror_under(pdf_root, src_dir, tex_file) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
+    // PDF (and synctex) now live in a folder sibling to the source file itself,
+    // rather than a mirrored path under a separate global root. This makes
+    // `latex-workshop.latex.outDir` trivial to configure: "%DIR%/_pdf" works
+    // at any nesting depth, since it never has to jump out of one tree and
+    // back into a parallel one.
+    let pdf_dir = tex_file.parent().unwrap_or(src_dir).join("_pdf");
+    if fs::create_dir_all(&pdf_dir).is_err() {
+        return false;
+    }
     let log_dir = match mirror_under(log_root, src_dir, tex_file) {
         Ok(d) => d,
         Err(_) => return false,
@@ -245,21 +248,19 @@ fn compile_latex(
 
     let tex_filename = format!("{}.tex", job_name);
     let outdir_arg = format!("-outdir={}", build_dir.display());
-	let log_stdout = fs::File::create(log_dir.join(format!("{}.stdout.log", job_name))).ok();
-	let log_stderr = fs::File::create(log_dir.join(format!("{}.stderr.log", job_name))).ok();
 
-	let status = Command::new("latexmk")
-	    .arg("-pdf")
-	    .arg("-synctex=1")
-	    .arg("-shell-escape")
-	    .arg("-interaction=nonstopmode")
-	    .arg("-halt-on-error")
-	    .arg(&outdir_arg)
-	    .arg(&tex_filename)
-	    .current_dir(tex_file.parent().unwrap_or_else(|| Path::new(".")))
-	    .stdout(log_stdout.map_or(Stdio::null(), Stdio::from))
-	    .stderr(log_stderr.map_or(Stdio::null(), Stdio::from))
-	    .status();
+    let status = Command::new("latexmk")
+        .arg("-pdf")
+        .arg("-synctex=1")
+        .arg("-shell-escape")
+        .arg("-interaction=nonstopmode")
+        .arg("-halt-on-error")
+        .arg(&outdir_arg)
+        .arg(&tex_filename)
+        .current_dir(tex_file.parent().unwrap_or_else(|| Path::new(".")))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 
     let success = match status {
         Ok(s) => s.success(),
@@ -271,8 +272,9 @@ fn compile_latex(
     if pdf_src.exists() {
         let _ = fs::copy(&pdf_src, pdf_dir.join(format!("{}.pdf", job_name)));
     }
-    
-    // Copy SyncTeX file
+
+    // Copy SyncTeX file — needed alongside the PDF for LaTeX Workshop's
+    // forward/reverse sync to work
     let synctex_src = build_dir.join(format!("{}.synctex.gz", job_name));
     if synctex_src.exists() {
         let _ = fs::copy(&synctex_src, pdf_dir.join(format!("{}.synctex.gz", job_name)));
