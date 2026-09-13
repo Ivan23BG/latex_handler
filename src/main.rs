@@ -248,6 +248,7 @@ fn compile_latex(
 
     let status = Command::new("latexmk")
         .arg("-pdf")
+        .arg("-synctex=1")
         .arg("-shell-escape")
         .arg("-interaction=nonstopmode")
         .arg("-halt-on-error")
