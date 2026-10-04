@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
 use rayon::prelude::*;
 use std::env;
@@ -11,14 +11,27 @@ use walkdir::WalkDir;
 const TEMPLATE_REPO_URL: &str = "https://github.com/Ivan23BG/latex_handler_template.git";
 const INSTALL_SCRIPT_URL: &str = "https://raw.githubusercontent.com/Ivan23BG/latex_handler/main/install.sh";
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum Theme {
+    Light,
+    Dark,
+    All,
+}
+
+impl Theme {
+    fn active_themes(&self) -> Vec<&'static str> {
+        match self {
+            Theme::Light => vec!["light"],
+            Theme::Dark => vec!["dark"],
+            Theme::All => vec!["light", "dark"],
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "latex_handler")]
 #[command(about = "Manages LaTeX templates and compiles documents", long_about = None)]
 struct Cli {
-    /// Enable legacy file discovery patterns (searches light_main.tex & dark_main.tex)
-    #[arg(long, global = true)]
-    legacy: bool,
-
     #[command(subcommand)]
     command: Commands,
 }
@@ -32,20 +45,28 @@ enum Commands {
     },
     /// Updates both the LaTeX templates and the latex_handler CLI binary
     Update,
-    /// Compiles LaTeX documents in parallel
+    /// Compiles LaTeX documents in parallel for specified theme(s)
     Compile {
         /// Optional path to the .tex file or project directory (defaults to current directory)
         path: Option<String>,
+
+        /// Theme to compile: light, dark, or all (defaults to light)
+        #[arg(short, long, value_enum, default_value_t = Theme::Light)]
+        theme: Theme,
     },
+}
+
+#[derive(Clone, Debug)]
+struct CompileJob {
+    tex_file: PathBuf,
+    theme: &'static str,
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    // Resolve cross-platform data directory (~/.local/share/latex_handler or OS equivalent)
     let proj_dirs = ProjectDirs::from("com", "Ivan23", "latex_handler")
         .expect("Could not determine user data directory");
-    
     let templates_dir = proj_dirs.data_dir();
 
     match &cli.command {
@@ -78,7 +99,7 @@ fn main() {
             update_self();
         }
         
-        Commands::Compile { path } => {
+        Commands::Compile { path, theme } => {
             let raw_path = match path {
                 Some(p) => PathBuf::from(p),
                 None => env::current_dir().expect("Failed to get current directory"),
@@ -96,22 +117,31 @@ fn main() {
 
             let exclude_patterns = vec!["legacy", "templates", "tmp", "temp"];
 
-            // Find target files based on standard or legacy mode
-            let tex_files = if cli.legacy {
-                println!(" [Info] Legacy mode active: searching for 'light_main.tex' and 'dark_main.tex'...");
-                find_legacy_tex_files(&src_dir, &exclude_patterns)
-            } else {
-                find_main_tex_files(&src_dir, "_main.tex", &exclude_patterns)
-            };
+            // Find target files ending with '_main.tex' or named 'main.tex'
+            let tex_files = find_target_tex_files(&src_dir, &exclude_patterns);
 
             if tex_files.is_empty() {
-                println!(" [Warn] No matching target LaTeX files found in '{}'", src_dir.display());
+                println!(" [Warn] No target LaTeX files ('main.tex' or '*_main.tex') found in '{}'", src_dir.display());
                 return;
             }
 
-            println!(" [Info] Found {} file(s) to compile:", tex_files.len());
-            for f in &tex_files {
-                println!("   - {}", f.display());
+            // Create compilation jobs for each target file & active theme
+            let active_themes = theme.active_themes();
+            let mut jobs = Vec::new();
+
+            for tex_file in &tex_files {
+                for &t in &active_themes {
+                    jobs.push(CompileJob {
+                        tex_file: tex_file.clone(),
+                        theme: t,
+                    });
+                }
+            }
+
+            println!(" [Info] Found {} file(s) x {} theme(s) = {} job(s) to compile:", 
+                tex_files.len(), active_themes.len(), jobs.len());
+            for j in &jobs {
+                println!("   - [{}] {}", j.theme, j.tex_file.display());
             }
 
             let num_cpus = std::thread::available_parallelism()
@@ -126,26 +156,25 @@ fn main() {
                 .build()
                 .expect("Failed to build thread pool");
 
-            let (successes, failures): (Vec<PathBuf>, Vec<PathBuf>) = pool.install(|| {
-                tex_files
-                    .into_par_iter()
-                    .partition(|tex| {
-                        compile_latex(tex, &src_dir, &build_root, &log_root)
-                    })
+            let (successes, failures): (Vec<CompileJob>, Vec<CompileJob>) = pool.install(|| {
+                jobs.into_par_iter()
+                    .partition(|job| compile_latex(job, &src_dir, &build_root, &log_root))
             });
 
             println!("\n===== Compilation Summary =====");
             if !successes.is_empty() {
                 println!(" [Info] Successfully compiled ({}):", successes.len());
-                for f in &successes {
-                    println!("    ✓ {}", f.display());
+                for j in &successes {
+                    let stem = j.tex_file.file_stem().unwrap().to_str().unwrap();
+                    println!("    ✓ {}_{}.pdf", j.theme, stem);
                 }
             }
 
             if !failures.is_empty() {
                 println!("\n[Error] Failed to compile ({}):", failures.len());
-                for f in &failures {
-                    println!("    ✗ {}", f.display());
+                for j in &failures {
+                    let stem = j.tex_file.file_stem().unwrap().to_str().unwrap();
+                    println!("    ✗ {}_{}.pdf", j.theme, stem);
                 }
                 std::process::exit(1);
             } else {
@@ -155,7 +184,6 @@ fn main() {
     }
 }
 
-/// Handles template directory updates via git pull or git clone
 fn update_templates(templates_dir: &Path) {
     let git_dir = templates_dir.join(".git");
 
@@ -190,7 +218,6 @@ fn update_templates(templates_dir: &Path) {
     }
 }
 
-/// Re-executes the remote install script to update the binary itself
 fn update_self() {
     println!(" [Info] Re-installing latest latex_handler binary...");
 
@@ -206,8 +233,7 @@ fn update_self() {
     }
 }
 
-/// Finds files ending in suffix (e.g. `_main.tex`)
-fn find_main_tex_files(root: &Path, suffix: &str, exclude_patterns: &[&str]) -> Vec<PathBuf> {
+fn find_target_tex_files(root: &Path, exclude_patterns: &[&str]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if !root.exists() {
         return files;
@@ -217,7 +243,7 @@ fn find_main_tex_files(root: &Path, suffix: &str, exclude_patterns: &[&str]) -> 
         let path = entry.path();
         if path.is_file() {
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name.ends_with(suffix) {
+                if file_name == "main.tex" || file_name.ends_with("_main.tex") {
                     let path_str = path.to_string_lossy();
                     if !exclude_patterns.iter().any(|pat| path_str.contains(pat)) {
                         files.push(path.to_path_buf());
@@ -230,31 +256,6 @@ fn find_main_tex_files(root: &Path, suffix: &str, exclude_patterns: &[&str]) -> 
     files
 }
 
-/// Legacy finder: specifically finds `light_main.tex` and `dark_main.tex`
-fn find_legacy_tex_files(root: &Path, exclude_patterns: &[&str]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    if !root.exists() {
-        return files;
-    }
-
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name == "light_main.tex" || file_name == "dark_main.tex" {
-                    let path_str = path.to_string_lossy();
-                    if !exclude_patterns.iter().any(|pat| path_str.contains(pat)) {
-                        files.push(path.to_path_buf());
-                    }
-                }
-            }
-        }
-    }
-
-    files
-}
-
-/// Mirrors source directory hierarchy under target root dir (`build/` or `logs/`)
 fn mirror_under(root_dir: &Path, src_dir: &Path, tex_file: &Path) -> io::Result<PathBuf> {
     let parent = tex_file.parent().unwrap_or(src_dir);
     let rel = parent.strip_prefix(src_dir).unwrap_or(Path::new(""));
@@ -263,36 +264,42 @@ fn mirror_under(root_dir: &Path, src_dir: &Path, tex_file: &Path) -> io::Result<
     Ok(target)
 }
 
-/// Compiles a single .tex document with latexmk and organizes output files
 fn compile_latex(
-    tex_file: &Path,
+    job: &CompileJob,
     src_dir: &Path,
     build_root: &Path,
     log_root: &Path,
 ) -> bool {
-    let job_name = match tex_file.file_stem().and_then(|s| s.to_str()) {
-        Some(stem) => stem,
+    let stem = match job.tex_file.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
         None => return false,
     };
 
-    let build_dir = match mirror_under(build_root, src_dir, tex_file) {
+    let job_name = format!("{}_{}", job.theme, stem);
+
+    let build_dir = match mirror_under(build_root, src_dir, &job.tex_file) {
         Ok(d) => d,
         Err(_) => return false,
     };
 
-    let log_dir = match mirror_under(log_root, src_dir, tex_file) {
+    let log_dir = match mirror_under(log_root, src_dir, &job.tex_file) {
         Ok(d) => d,
         Err(_) => return false,
     };
 
-    // PDF & SyncTeX live in `<source_folder>/_pdf/`
-    let pdf_dir = tex_file.parent().unwrap_or(src_dir).join("_pdf");
+    let pdf_dir = job.tex_file.parent().unwrap_or(src_dir).join("_pdf");
     if fs::create_dir_all(&pdf_dir).is_err() {
         return false;
     }
 
-    let tex_filename = format!("{}.tex", job_name);
+    let tex_filename = match job.tex_file.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+
     let outdir_arg = format!("-outdir={}", build_dir.display());
+    let jobname_arg = format!("-jobname={}", job_name);
+    let latex_code = format!(r"\def\THEME{{{}}}\input{{{}}}", job.theme, tex_filename);
 
     let status = Command::new("latexmk")
         .arg("-pdf")
@@ -301,8 +308,9 @@ fn compile_latex(
         .arg("-interaction=nonstopmode")
         .arg("-halt-on-error")
         .arg(&outdir_arg)
-        .arg(&tex_filename)
-        .current_dir(tex_file.parent().unwrap_or_else(|| Path::new(".")))
+        .arg(&jobname_arg)
+        .arg(&latex_code)
+        .current_dir(job.tex_file.parent().unwrap_or_else(|| Path::new(".")))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -312,19 +320,19 @@ fn compile_latex(
         Err(_) => false,
     };
 
-    // 1. Copy PDF to _pdf/
+    // 1. Copy PDF to _pdf/<job_name>.pdf
     let pdf_src = build_dir.join(format!("{}.pdf", job_name));
     if pdf_src.exists() {
         let _ = fs::copy(&pdf_src, pdf_dir.join(format!("{}.pdf", job_name)));
     }
 
-    // 2. Copy SyncTeX to _pdf/
+    // 2. Copy SyncTeX to _pdf/<job_name>.synctex.gz
     let synctex_src = build_dir.join(format!("{}.synctex.gz", job_name));
     if synctex_src.exists() {
         let _ = fs::copy(&synctex_src, pdf_dir.join(format!("{}.synctex.gz", job_name)));
     }
 
-    // 3. Move log file to logs/
+    // 3. Move log file to logs/<job_name>.log
     let log_src = build_dir.join(format!("{}.log", job_name));
     if log_src.exists() {
         let dest_log = log_dir.join(format!("{}.log", job_name));
@@ -336,7 +344,6 @@ fn compile_latex(
     success
 }
 
-/// Recursively copies a directory tree, ignoring `.git`
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
     let src = src.as_ref();
     let dst = dst.as_ref();
