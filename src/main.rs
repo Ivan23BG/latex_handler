@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command};
 use walkdir::WalkDir;
 
 const TEMPLATE_REPO_URL: &str = "https://github.com/Ivan23BG/latex_handler_template.git";
@@ -299,46 +299,50 @@ fn compile_latex(
 
     let outdir_arg = format!("-outdir={}", build_dir.display());
     let jobname_arg = format!("-jobname={}", job_name);
-    let latex_code = format!(r"\def\THEME{{{}}}\input{{{}}}", job.theme, tex_filename);
+    let pretex_arg = format!(r#"-pretex=\def\THEME{{{}}}"#, job.theme);
 
-    let status = Command::new("latexmk")
+    let output = Command::new("latexmk")
         .arg("-pdf")
+        .arg("-g")           // Force la recompilation sans se fier au cache latexmk
+        .arg("-usepretex")  // Obligatoire : indique à latexmk d'utiliser la valeur de -pretex !
+        .arg(&pretex_arg)
         .arg("-synctex=1")
         .arg("-shell-escape")
         .arg("-interaction=nonstopmode")
         .arg("-halt-on-error")
         .arg(&outdir_arg)
         .arg(&jobname_arg)
-        .arg(&latex_code)
+        .arg(tex_filename)
         .current_dir(job.tex_file.parent().unwrap_or_else(|| Path::new(".")))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .output();
 
-    let success = match status {
-        Ok(s) => s.success(),
-        Err(_) => false,
+    let (success, stderr_bytes) = match output {
+        Ok(out) => (out.status.success(), out.stderr),
+        Err(_) => (false, Vec::new()),
     };
 
-    // 1. Copy PDF to _pdf/<job_name>.pdf
+    // 1. Copie du PDF vers _pdf/<job_name>.pdf
     let pdf_src = build_dir.join(format!("{}.pdf", job_name));
     if pdf_src.exists() {
         let _ = fs::copy(&pdf_src, pdf_dir.join(format!("{}.pdf", job_name)));
     }
 
-    // 2. Copy SyncTeX to _pdf/<job_name>.synctex.gz
+    // 2. Copie du SyncTeX vers _pdf/<job_name>.synctex.gz
     let synctex_src = build_dir.join(format!("{}.synctex.gz", job_name));
     if synctex_src.exists() {
         let _ = fs::copy(&synctex_src, pdf_dir.join(format!("{}.synctex.gz", job_name)));
     }
 
-    // 3. Move log file to logs/<job_name>.log
+    // 3. Copie/déplacement du log
     let log_src = build_dir.join(format!("{}.log", job_name));
     if log_src.exists() {
         let dest_log = log_dir.join(format!("{}.log", job_name));
         let _ = fs::rename(&log_src, &dest_log).or_else(|_| {
             fs::copy(&log_src, &dest_log).and_then(|_| fs::remove_file(&log_src))
         });
+    } else if success || !!stderr_bytes.is_empty() {
+        let dest_log = log_dir.join(format!("{}.log", job_name));
+        let _ = fs::write(dest_log, stderr_bytes);
     }
 
     success
